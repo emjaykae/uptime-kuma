@@ -7,8 +7,65 @@ const { R } = require("redbean-node");
 const { badgeConstants } = require("../../src/util");
 const { makeBadge } = require("badge-maker");
 const { UptimeCalculator } = require("../uptime-calculator");
+const dayjs = require("dayjs");
 
 let router = express.Router();
+
+/**
+ * Aggregate heartbeats into hourly periods
+ * Each aggregated heartbeat represents the worst status during that hour
+ * @param {Array} heartbeats Array of heartbeat objects
+ * @returns {Array} Aggregated heartbeats (one per hour for the last 24 hours)
+ */
+function aggregateHeartbeatsByHour(heartbeats) {
+    if (!heartbeats || heartbeats.length === 0) {
+        return [];
+    }
+
+    const hourlyBuckets = new Map();
+    
+    for (const beat of heartbeats) {
+        const beatTime = dayjs(beat.time);
+        const hourKey = beatTime.startOf("hour").toISOString();
+        
+        if (!hourlyBuckets.has(hourKey)) {
+            hourlyBuckets.set(hourKey, {
+                time: hourKey,
+                status: beat.status,
+                msg: beat.msg,
+                ping: beat.ping,
+                downCount: beat.status === 0 ? 1 : 0,
+                totalCount: 1
+            });
+        } else {
+            const bucket = hourlyBuckets.get(hourKey);
+            bucket.totalCount++;
+            
+            // Count down statuses
+            if (beat.status === 0) {
+                bucket.downCount++;
+            }
+            
+            // Keep worst status (0=down is worst, 1=up is best, 2=pending, 3=maintenance)
+            if (beat.status === 0 || (bucket.status !== 0 && beat.status < bucket.status)) {
+                bucket.status = beat.status;
+                bucket.msg = beat.msg;
+            }
+            
+            // Average ping
+            if (beat.ping !== null && bucket.ping !== null) {
+                bucket.ping = (bucket.ping + beat.ping) / 2;
+            }
+        }
+    }
+    
+    // Convert map to array and sort by time
+    const aggregated = Array.from(hourlyBuckets.values())
+        .sort((a, b) => new Date(a.time) - new Date(b.time));
+    
+    // Return last 24 entries (24 hours)
+    return aggregated.slice(-24);
+}
 
 let cache = apicache.middleware;
 const server = UptimeKumaServer.getInstance();
@@ -89,13 +146,16 @@ router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (reques
                     SELECT * FROM heartbeat
                     WHERE monitor_id = ?
                     ORDER BY time DESC
-                    LIMIT 100
+                    LIMIT 1500
             `, [
                 monitorID,
             ]);
 
             list = R.convertToBeans("heartbeat", list);
-            heartbeatList[monitorID] = list.reverse().map(row => row.toPublicJSON());
+            
+            // Aggregate heartbeats by hour for better visualization over 24h period
+            const aggregatedList = aggregateHeartbeatsByHour(list.reverse());
+            heartbeatList[monitorID] = aggregatedList.map(row => row.toPublicJSON ? row.toPublicJSON() : row);
 
             const uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
             uptimeList[`${monitorID}_24`] = uptimeCalculator.get24Hour().uptime;

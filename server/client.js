@@ -50,7 +50,7 @@ async function sendHeartbeatList(socket, monitorID, toUser = false, overwrite = 
         SELECT * FROM heartbeat
         WHERE monitor_id = ?
         ORDER BY time DESC
-        LIMIT 100
+        LIMIT 1500
     `, [
         monitorID,
     ]);
