@@ -17,7 +17,7 @@ spawn("docker", [
     "--rm",
     "-it",
     "-p", "3000:3000",
-    "-p", "3001:3001",
+    "-p", "3005:3005",
     "--pull", "always",
     "-e", `UPTIME_KUMA_GH_REPO=${prName}`,
     "louislam/uptime-kuma:pr-test2"
