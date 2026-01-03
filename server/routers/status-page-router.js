@@ -12,25 +12,28 @@ const dayjs = require("dayjs");
 let router = express.Router();
 
 /**
- * Aggregate heartbeats into hourly periods
- * Each aggregated heartbeat represents the worst status during that hour
+ * Aggregate heartbeats into 5-minute periods
+ * Each aggregated heartbeat represents the worst status during that 5-minute interval
  * @param {Array} heartbeats Array of heartbeat objects
- * @returns {Array} Aggregated heartbeats (one per hour for the last 24 hours)
+ * @returns {Array} Aggregated heartbeats (one per 5 minutes for the last 24 hours)
  */
-function aggregateHeartbeatsByHour(heartbeats) {
+function aggregateHeartbeatsByFiveMinutes(heartbeats) {
     if (!heartbeats || heartbeats.length === 0) {
         return [];
     }
 
-    const hourlyBuckets = new Map();
+    const fiveMinuteBuckets = new Map();
     
     for (const beat of heartbeats) {
         const beatTime = dayjs(beat.time);
-        const hourKey = beatTime.startOf("hour").toISOString();
+        // Round down to nearest 5-minute interval
+        const minutes = beatTime.minute();
+        const roundedMinutes = Math.floor(minutes / 5) * 5;
+        const intervalKey = beatTime.startOf("hour").add(roundedMinutes, "minutes").toISOString();
         
-        if (!hourlyBuckets.has(hourKey)) {
-            hourlyBuckets.set(hourKey, {
-                time: hourKey,
+        if (!fiveMinuteBuckets.has(intervalKey)) {
+            fiveMinuteBuckets.set(intervalKey, {
+                time: intervalKey,
                 status: beat.status,
                 msg: beat.msg,
                 ping: beat.ping,
@@ -38,7 +41,7 @@ function aggregateHeartbeatsByHour(heartbeats) {
                 totalCount: 1
             });
         } else {
-            const bucket = hourlyBuckets.get(hourKey);
+            const bucket = fiveMinuteBuckets.get(intervalKey);
             bucket.totalCount++;
             
             // Count down statuses
@@ -60,11 +63,11 @@ function aggregateHeartbeatsByHour(heartbeats) {
     }
     
     // Convert map to array and sort by time
-    const aggregated = Array.from(hourlyBuckets.values())
+    const aggregated = Array.from(fiveMinuteBuckets.values())
         .sort((a, b) => new Date(a.time) - new Date(b.time));
     
-    // Return last 24 entries (24 hours)
-    return aggregated.slice(-24);
+    // Return last 288 entries (24 hours * 12 five-minute intervals per hour)
+    return aggregated.slice(-288);
 }
 
 let cache = apicache.middleware;
@@ -153,8 +156,8 @@ router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (reques
 
             list = R.convertToBeans("heartbeat", list);
             
-            // Aggregate heartbeats by hour for better visualization over 24h period
-            const aggregatedList = aggregateHeartbeatsByHour(list.reverse());
+            // Aggregate heartbeats by 5 minutes for better visualization over 24h period
+            const aggregatedList = aggregateHeartbeatsByFiveMinutes(list.reverse());
             heartbeatList[monitorID] = aggregatedList.map(row => row.toPublicJSON ? row.toPublicJSON() : row);
 
             const uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
